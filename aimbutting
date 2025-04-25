@@ -1,0 +1,117 @@
+-- Begin AimReaper core script
+local RunService = game:GetService("RunService")
+local Players    = game:GetService("Players")
+local UIS        = game:GetService("UserInputService")
+local cam        = workspace.CurrentCamera
+
+-- Configuration
+local holding = false
+local target  = nil
+local deadzone        = 2
+local min_speed       = 10
+local max_speed       = 50
+local speed_factor    = 0.5
+local prediction_time = 0.05
+
+-- Prediction vars
+local last_pos, last_time, velocity = nil, nil, Vector3.new()
+
+-- Helpers
+local function get_players()
+    local list = {}
+    for _, team in ipairs(workspace.Players:GetChildren()) do
+        for _, p in ipairs(team:GetChildren()) do
+            if p:IsA("Model") then table.insert(list, p) end
+        end
+    end
+    return list
+end
+
+local function is_enemy(player)
+    local local_team = Players.LocalPlayer.Team
+    local folder     = player:FindFirstChildWhichIsA("Folder")
+    local helmet     = folder and folder:FindFirstChildOfClass("MeshPart")
+    if not helmet then return false end
+    local col = helmet.BrickColor.Name
+    if col == "Black" and local_team.Name == "Phantoms" then return false end
+    if col ~= "Black" and local_team.Name == "Ghosts"   then return false end
+    return true
+end
+
+local function get_head(player)
+    for _, part in player:GetChildren() do
+        if part:IsA("BasePart") then
+            local mesh = part:FindFirstChildOfClass("SpecialMesh")
+            if mesh and mesh.MeshId == "rbxassetid://6179256256" then
+                return part
+            end
+        end
+    end
+end
+
+local function get_closest_player()
+    local closest, shortest = nil, math.huge
+    local center = Vector2.new(cam.ViewportSize.X/2, cam.ViewportSize.Y/2)
+    for _, player in ipairs(get_players()) do
+        if player:IsDescendantOf(workspace.Ignore.DeadBody) then continue end
+        if not is_enemy(player) then continue end
+        local head = get_head(player)
+        if head then
+            local pos3, onScreen = cam:WorldToViewportPoint(head.Position)
+            if onScreen then
+                local pos2 = Vector2.new(pos3.X, pos3.Y)
+                local dist = (pos2 - center).Magnitude
+                if dist < shortest then
+                    shortest = dist
+                    closest  = head
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- Input binding
+UIS.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton2 then
+        holding   = true
+        target    = get_closest_player()
+        last_pos  = target and target.Position
+        last_time = tick()
+        velocity  = Vector3.new()
+    end
+end)
+
+UIS.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton2 then
+        holding, target, last_pos, last_time = false, nil, nil, nil
+        velocity = Vector3.new()
+    end
+end)
+
+-- Aim loop
+RunService.RenderStepped:Connect(function()
+    if holding and target and target.Parent then
+        -- compute velocity
+        if last_pos then
+            local dt = tick() - last_time
+            if dt > 0 then
+                velocity = (target.Position - last_pos) / dt
+            end
+        end
+        last_pos, last_time = target.Position, tick()
+
+        -- predict & move
+        local aim3, onScreen = cam:WorldToViewportPoint(target.Position + velocity * prediction_time)
+        if onScreen then
+            local mousePos = UIS:GetMouseLocation()
+            local delta    = Vector2.new(aim3.X, aim3.Y) - mousePos
+            if delta.Magnitude > deadzone then
+                local spd  = math.clamp(delta.Magnitude * speed_factor, min_speed, max_speed)
+                local move = (delta.Magnitude > spd) and (delta.Unit * spd) or delta
+                mousemoverel(move.X, move.Y)
+            end
+        end
+    end
+end)
+-- End AimReaper core script
