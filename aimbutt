@@ -1,0 +1,139 @@
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local cam = workspace.CurrentCamera
+
+-- Configuration
+local holding = false
+local target = nil
+local deadzone = 2          -- Pixels; stops movement when this close
+local min_speed = 10        -- Minimum pixels per frame
+local max_speed = 50        -- Maximum pixels per frame
+local speed_factor = 0.5    -- Scales speed with distance (tweakable)
+local prediction_time = 0.05 -- Seconds to predict target movement
+
+-- Variables for prediction
+local last_pos = nil
+local last_time = nil
+local velocity = Vector3.new()
+
+-- Target Acquisition Functions
+local function get_players()
+    local entity_list = {}
+    for _, team in ipairs(workspace.Players:GetChildren()) do
+        for _, player in ipairs(team:GetChildren()) do
+            if player:IsA("Model") then
+                table.insert(entity_list, player)
+            end
+        end
+    end
+    return entity_list
+end
+
+local function is_enemy(player)
+    local local_player_team = Players.LocalPlayer.Team
+    local helmet = player:FindFirstChildWhichIsA("Folder") and player:FindFirstChildWhichIsA("Folder"):FindFirstChildOfClass("MeshPart")
+    if not helmet then return false end
+    local player_color = helmet.BrickColor.Name
+    if player_color == "Black" and local_player_team.Name == "Phantoms" then
+        return false
+    elseif player_color ~= "Black" and local_player_team.Name == "Ghosts" then
+        return false
+    end
+    return true
+end
+
+local function get_head(player)
+    for _, body_part in player:GetChildren() do
+        if body_part:IsA("BasePart") then
+            local mesh = body_part:FindFirstChildOfClass("SpecialMesh")
+            if mesh and mesh.MeshId == "rbxassetid://6179256256" then
+                return body_part
+            end
+        end
+    end
+    return nil
+end
+
+local function get_closest_player()
+    local closest_part = nil
+    local shortest_distance = math.huge
+    local screen_center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
+
+    for _, player in ipairs(get_players()) do
+        if player:IsDescendantOf(workspace.Ignore.DeadBody) then continue end
+        if not is_enemy(player) then continue end
+
+        local head = get_head(player)
+        if head then
+            local part_position, on_screen = cam:WorldToViewportPoint(head.Position)
+            if on_screen then
+                local screen_position = Vector2.new(part_position.X, part_position.Y)
+                local distance_to_center = (screen_position - screen_center).Magnitude
+                if distance_to_center < shortest_distance then
+                    closest_part = head
+                    shortest_distance = distance_to_center
+                end
+            end
+        end
+    end
+    return closest_part
+end
+
+-- Input Handling
+UIS.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        holding = true
+        target = get_closest_player()
+        last_pos = target and target.Position
+        last_time = tick()
+        velocity = Vector3.new()
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        holding = false
+        target = nil
+        last_pos = nil
+        last_time = nil
+        velocity = Vector3.new()
+    end
+end)
+
+-- Main Aiming Loop
+RunService.RenderStepped:Connect(function()
+    if holding and target and target.Parent then
+        -- Calculate velocity for prediction
+        if last_pos then
+            local dt = tick() - last_time
+            if dt > 0 then
+                velocity = (target.Position - last_pos) / dt
+            end
+        end
+        last_pos = target.Position
+        last_time = tick()
+
+        -- Predict target position
+        local aim_pos = target.Position + velocity * prediction_time
+        local part_position, on_screen = cam:WorldToViewportPoint(aim_pos)
+
+        if on_screen then
+            local target_screen_pos = Vector2.new(part_position.X, part_position.Y)
+            local mouse_pos = UIS:GetMouseLocation()
+            local delta = target_screen_pos - mouse_pos
+
+            -- Only move if outside deadzone
+            if delta.Magnitude > deadzone then
+                -- Dynamic speed based on distance
+                local move_speed = math.clamp(delta.Magnitude * speed_factor, min_speed, max_speed)
+                local movement = delta.Magnitude > move_speed and delta.Unit * move_speed or delta
+                mousemoverel(movement.X, movement.Y)
+            end
+        end
+    else
+        last_pos = nil
+        last_time = nil
+        velocity = Vector3.new()
+    end
+end)
